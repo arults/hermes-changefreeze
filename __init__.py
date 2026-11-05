@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 import json
 
-from freeze import (
+from .freeze import (
     FreezeState,
     decide_pre_tool_call,
     decide_with_allowlist,
@@ -11,9 +11,9 @@ from freeze import (
     clear_freeze,
     is_window_active,
 )
-from ledger import FileLedger, LedgerEntry, now_iso
-from patterns import DEFAULT_PATTERNS
-from allowlist import Allowlist, fingerprint
+from .ledger import FileLedger, LedgerEntry, now_iso
+from .patterns import DEFAULT_PATTERNS
+from .allowlist import Allowlist, fingerprint
 
 PLUGIN_NAME = "changefreeze"
 _STATE_KEY = "freeze_state"

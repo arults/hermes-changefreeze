@@ -5,7 +5,10 @@ from datetime import datetime, timezone
 from typing import Any
 import json
 
-from patterns import matches_change_pattern, DEFAULT_PATTERNS
+try:
+    from .patterns import matches_change_pattern, DEFAULT_PATTERNS
+except ImportError:  # plain `python tests/...` without package context
+    from patterns import matches_change_pattern, DEFAULT_PATTERNS
 # allowlist imported by callers
 
 
