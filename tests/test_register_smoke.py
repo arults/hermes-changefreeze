@@ -37,22 +37,22 @@ def main():
     assert "pre_tool_call" in ctx.hooks
     assert set(ctx.tools) >= {"changefreeze_set", "changefreeze_status", "changefreeze_ledger", "changefreeze_allow_once", "changefreeze_patterns"}
     assert "freeze" in ctx.commands
-    ctx.tools["changefreeze_set"](until="2099-01-01T00:00:00Z", reason="demo", mode="approve")
+    ctx.tools["changefreeze_set"]({"until":"2099-01-01T00:00:00Z", "reason":"demo", "mode":"approve"})
     d = ctx.hooks["pre_tool_call"](tool_name="shell_exec", args={"command": "git push origin main"})
     assert d and d["action"] == "approve", d
     assert ctx.hooks["pre_tool_call"](tool_name="shell_exec", args={"command": "echo hi"}) is None
-    assert ctx.tools["changefreeze_status"]()["active_window"] is True
+    assert ctx.tools["changefreeze_status"]({})["active_window"] is True
     print("PASS register smoke: hook approve on git push, allow echo")
-    ctx.tools["changefreeze_set"](until="2099-01-01T00:00:00Z", reason="hard", mode="block")
+    ctx.tools["changefreeze_set"]({"until":"2099-01-01T00:00:00Z", "reason":"hard", "mode":"block"})
     d3 = ctx.hooks["pre_tool_call"](tool_name="shell_exec", args={"command": "kubectl apply -f x"})
     assert d3 and d3["action"] == "block", d3
     print("PASS block mode")
     assert "cleared" in ctx.commands["freeze"]("off").lower()
     assert ctx.hooks["pre_tool_call"](tool_name="shell_exec", args={"command": "git push"}) is None
     print("PASS /freeze off clears gate")
-    ctx.tools["changefreeze_set"](until="2099-01-01T00:00:00Z", reason="hard", mode="block")
+    ctx.tools["changefreeze_set"]({"until":"2099-01-01T00:00:00Z", "reason":"hard", "mode":"block"})
     assert ctx.hooks["pre_tool_call"](tool_name="shell_exec", args={"command": "npm publish"})["action"] == "block"
-    ctx.tools["changefreeze_allow_once"](command="npm publish")
+    ctx.tools["changefreeze_allow_once"]({"command":"npm publish"})
     assert ctx.hooks["pre_tool_call"](tool_name="shell_exec", args={"command": "npm publish"}) is None
     print("PASS allow_once escape")
     print("ALL SMOKE OK")

@@ -115,18 +115,20 @@ def register(ctx):
 
     ctx.register_hook("pre_tool_call", pre_tool_call)
 
-    def tool_set(until: str = "", reason: str = "", mode: str = "approve", **kwargs) -> dict:
+
+    def tool_set(args: dict, **kwargs):
+        args = args or {}
+        until = str(args.get("until") or "").strip()
+        reason = str(args.get("reason") or "")
+        mode = str(args.get("mode") or "approve")
         state = _load_state(ctx)
-        if not until and not reason and mode:
-            # treat as activate open-ended if until empty? require until or explicit forever
-            pass
-        until_val = until.strip() or None
+        until_val = until or None
         set_freeze(state, until=until_val, reason=reason or state.reason, mode=mode or "approve", active=True)
         _save_state(ctx, state)
         _record(ctx, event="set", action=mode, message=f"until={until_val} reason={reason}")
         return {"ok": True, "state": state.to_dict()}
 
-    def tool_status(**kwargs) -> dict:
+    def tool_status(args: dict | None = None, **kwargs):
         state = _load_state(ctx)
         return {
             "ok": True,
@@ -135,38 +137,102 @@ def register(ctx):
             "default_pattern_count": len(DEFAULT_PATTERNS),
         }
 
-    def tool_ledger(limit: int = 20, **kwargs) -> dict:
-        rows = _ledger(ctx).recent(int(limit) or 20)
+    def tool_ledger(args: dict | None = None, **kwargs):
+        args = args or {}
+        limit = int(args.get("limit") or 20)
+        rows = _ledger(ctx).recent(limit)
         return {"ok": True, "rows": rows}
+
+    def tool_allow_once(args: dict, **kwargs):
+        args = args or {}
+        tool_name = str(args.get("tool_name") or "shell_exec")
+        command = str(args.get("command") or "")
+        allow = _load_allow(ctx)
+        call_args = {"command": command}
+        fp = fingerprint(tool_name, call_args)
+        allow.allow_once(fp)
+        _save_allow(ctx, allow)
+        _record(ctx, event="allow_once", tool_name=tool_name, action="allow", message=command[:200], detail={"fp": fp})
+        return {"ok": True, "fingerprint": fp, "note": "Next matching call with same tool+command is allowed once"}
+
+    def tool_patterns(args: dict | None = None, **kwargs):
+        state = _load_state(ctx)
+        return {"ok": True, "patterns": state.patterns or DEFAULT_PATTERNS}
+
+    TOOLSET = "changefreeze"
 
     ctx.register_tool(
         name="changefreeze_set",
+        toolset=TOOLSET,
         description="Activate a change freeze window. Blocks/approves deploy-push shell commands until the window ends.",
         schema={
-            "type": "object",
-            "properties": {
-                "until": {"type": "string", "description": "ISO-8601 UTC end time, e.g. 2099-01-01T00:00:00Z"},
-                "reason": {"type": "string", "description": "Why the freeze is on"},
-                "mode": {"type": "string", "enum": ["approve", "block"], "description": "approve=escalate to human; block=hard veto"},
+            "name": "changefreeze_set",
+            "description": "Activate a change freeze window for deploy/push shell commands.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "until": {"type": "string", "description": "ISO-8601 UTC end time, e.g. 2099-01-01T00:00:00Z"},
+                    "reason": {"type": "string", "description": "Why the freeze is on"},
+                    "mode": {"type": "string", "enum": ["approve", "block"], "description": "approve=escalate to human; block=hard veto"},
+                },
+                "required": ["until"],
             },
-            "required": ["until"],
         },
         handler=tool_set,
     )
     ctx.register_tool(
         name="changefreeze_status",
+        toolset=TOOLSET,
         description="Show whether a ChangeFreeze window is active and current settings.",
-        schema={"type": "object", "properties": {}},
+        schema={
+            "name": "changefreeze_status",
+            "description": "Show ChangeFreeze window status.",
+            "parameters": {"type": "object", "properties": {}},
+        },
         handler=tool_status,
     )
     ctx.register_tool(
         name="changefreeze_ledger",
+        toolset=TOOLSET,
         description="Show recent ChangeFreeze decisions (block/approve/set/clear).",
         schema={
-            "type": "object",
-            "properties": {"limit": {"type": "integer", "description": "Max rows (default 20)"}},
+            "name": "changefreeze_ledger",
+            "description": "Show recent ChangeFreeze ledger rows.",
+            "parameters": {
+                "type": "object",
+                "properties": {"limit": {"type": "integer", "description": "Max rows (default 20)"}},
+            },
         },
         handler=tool_ledger,
+    )
+    ctx.register_tool(
+        name="changefreeze_allow_once",
+        toolset=TOOLSET,
+        description="Allow the next matching shell command once during an active freeze (escape hatch after human review).",
+        schema={
+            "name": "changefreeze_allow_once",
+            "description": "Allow one matching shell command once during a freeze.",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "tool_name": {"type": "string", "description": "Usually shell_exec"},
+                    "command": {"type": "string", "description": "Exact command string to allow once"},
+                },
+                "required": ["command"],
+            },
+        },
+        handler=tool_allow_once,
+    )
+    ctx.register_tool(
+        name="changefreeze_patterns",
+        toolset=TOOLSET,
+        description="List the regex patterns ChangeFreeze treats as deploy/push actions.",
+        schema={
+            "name": "changefreeze_patterns",
+            "description": "List ChangeFreeze deploy/push regex patterns.",
+            "parameters": {"type": "object", "properties": {}},
+        },
+        handler=tool_patterns,
     )
 
     def cmd_freeze(args: str = "", **kwargs) -> str:
@@ -224,39 +290,6 @@ def register(ctx):
             "Usage: /freeze status|on [approve|block] [reason]|until <iso> [approve|block] [reason]|off|ledger|patterns"
         )
 
-
-    def tool_allow_once(tool_name: str = "shell_exec", command: str = "", **kwargs) -> dict:
-        allow = _load_allow(ctx)
-        args = {"command": command}
-        fp = fingerprint(tool_name, args)
-        allow.allow_once(fp)
-        _save_allow(ctx, allow)
-        _record(ctx, event="allow_once", tool_name=tool_name, action="allow", message=command[:200], detail={"fp": fp})
-        return {"ok": True, "fingerprint": fp, "note": "Next matching call with same tool+command is allowed once"}
-
-    def tool_patterns(**kwargs) -> dict:
-        state = _load_state(ctx)
-        return {"ok": True, "patterns": state.patterns or DEFAULT_PATTERNS}
-
-    ctx.register_tool(
-        name="changefreeze_allow_once",
-        description="Allow the next matching shell command once during an active freeze (escape hatch after human review).",
-        schema={
-            "type": "object",
-            "properties": {
-                "tool_name": {"type": "string", "description": "Usually shell_exec"},
-                "command": {"type": "string", "description": "Exact command string to allow once"},
-            },
-            "required": ["command"],
-        },
-        handler=tool_allow_once,
-    )
-    ctx.register_tool(
-        name="changefreeze_patterns",
-        description="List the regex patterns ChangeFreeze treats as deploy/push actions.",
-        schema={"type": "object", "properties": {}},
-        handler=tool_patterns,
-    )
 
     ctx.register_command(
         "freeze",
