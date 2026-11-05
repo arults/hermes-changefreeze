@@ -1,0 +1,24 @@
+name: changefreeze
+version: 0.1.0
+description: >-
+  Schedule-based change freeze for Hermes: while a freeze window is active,
+  deploy/push-shaped shell commands (git push, kubectl apply, terraform apply,
+  npm/docker publish, helm upgrade, …) are blocked or escalated to Hermes'
+  human-approval gate via pre_tool_call. Manage with /freeze and tools
+  changefreeze_set / changefreeze_status / changefreeze_ledger. Durable local
+  ledger. Stdlib only — no network, no LLM in the hot path, no secrets.
+  Disclosure — matches shell tool arguments with local regex patterns and
+  writes decision rows (tool name, action, truncated args, timestamps) to
+  plugin-data via plugin_db / JSONL; never sends data off-machine.
+author: arults
+provides_tools:
+  - changefreeze_set
+  - changefreeze_status
+  - changefreeze_ledger
+  - changefreeze_allow_once
+  - changefreeze_patterns
+provides_hooks:
+  - pre_tool_call
+provides_commands:
+  - freeze
+# requires_hermes set after doctor against installed hermes-agent
