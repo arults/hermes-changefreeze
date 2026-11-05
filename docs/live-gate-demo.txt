@@ -1,0 +1,20 @@
+=== LIVE Hermes 0.19 PluginManager demo: ChangeFreeze ===
+repo: https://github.com/arults/hermes-changefreeze @ 21cfa3c3f6c9c6a3856991e562f999b04d4c8061
+
+$ /freeze until 2099-01-01T00:00:00Z approve prod blackout
+ChangeFreeze until 2099-01-01T00:00:00Z mode=approve reason='prod blackout'
+
+Agent → shell_exec git push origin main
+→ directive='approve'
+→ message=ChangeFreeze: 'shell_exec' matches deploy/push pattern (\bgit\s+push\b) during freeze until 2099-01-01T00:00:00Z (prod blackout). Use /freeze off or /freeze status. Mode=approve.
+
+Agent → shell_exec echo hello
+→ directive=None (allowed)
+
+$ /freeze off
+ChangeFreeze cleared.
+
+Agent → shell_exec git push origin main
+→ directive=None (proceeds)
+
+✅ LIVE GATE OK — more than a skill
