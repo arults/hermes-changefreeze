@@ -1,23 +1,14 @@
 ---
 name: changefreeze
-description: Schedule deploy/push freezes for Hermes with /freeze and changefreeze_* tools.
+description: Quiet window so Hermes asks before it ships code.
 ---
 
 # ChangeFreeze
 
-Use this when the user wants a **change freeze** / release blackout so the agent cannot silently `git push`, `kubectl apply`, `terraform apply`, `npm publish`, `docker push`, etc.
+An AI helper can ship code at a bad time and break something that is live.
 
-## Commands
-- `/freeze until 2099-01-01T00:00:00Z approve prod blackout`
-- `/freeze on block emergency`
-- `/freeze status`
-- `/freeze ledger`
-- `/freeze off`
-- `/freeze patterns`
+You set a quiet window. During that window, Hermes asks you before it ships. Everyday work still runs. When the window ends, shipping continues again.
 
-## Tools
-- `changefreeze_set(until, reason, mode)`
-- `changefreeze_status`
-- `changefreeze_ledger`
+Short demo: https://github.com/arults/hermes-changefreeze/releases/download/v0.1.0-demo/changefreeze-demo.mp4
 
-Mode `approve` escalates matching shell tools to Hermes' human gate; mode `block` hard-vetoes.
+Project: https://github.com/arults/hermes-changefreeze
