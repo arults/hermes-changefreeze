@@ -95,6 +95,31 @@ def test_allow_once_escapes():
     d3 = decide_with_allowlist(state, "shell_exec", args, allow)
     assert d3 and d3["action"] == "block"
 
+
+def test_npm_publish_and_gh_release():
+    assert matches_change_pattern("shell_exec", {"command": "npm publish --access public"})[0]
+    assert matches_change_pattern("shell_exec", {"command": "gh release create v1.0.0"})[0]
+
+
+def test_cargo_publish_and_fly_deploy():
+    assert matches_change_pattern("shell_exec", {"command": "cargo publish"})[0]
+    assert matches_change_pattern("shell_exec", {"command": "fly deploy --app api"})[0]
+
+
+def test_non_deploy_curl_allowed():
+    ok, _ = matches_change_pattern("shell_exec", {"command": "curl https://example.com/health"})
+    assert not ok
+
+
+def test_block_mode_message_names_plugin():
+    until = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    state = set_freeze(FreezeState(), until=until, reason="launch freeze", mode="block")
+    d = decide_pre_tool_call(state, "shell_exec", {"command": "git push origin main"})
+    assert d["action"] == "block"
+    assert "ChangeFreeze" in d["message"]
+    assert "launch freeze" in d["message"]
+
+
 if __name__ == "__main__":
     tests = [v for k, v in list(globals().items()) if k.startswith("test_") and callable(v)]
     failed = 0

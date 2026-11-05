@@ -1,0 +1,5 @@
+Plugin Doctor: 
+/workspace/forge/lab/2026-11-05/hermes-plugin/.hermes-home/plugins/changefreeze
+  manifest: changefreeze 0.1.0 (standalone)
+  OK: runtime discovery, manifest parsing, import, and registration passed
+  registrations: 5 tool(s), 1 hook(s)

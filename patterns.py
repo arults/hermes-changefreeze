@@ -12,6 +12,8 @@ DEFAULT_PATTERNS: list[str] = [
     r"\bterraform\s+(apply|destroy)\b",
     r"\bpulumi\s+(up|destroy)\b",
     r"\bnpm\s+publish\b",
+    r"\bcargo\s+publish\b",
+    r"\bgh\s+release\s+create\b",
     r"\bpnpm\s+publish\b",
     r"\byarn\s+npm\s+publish\b",
     r"\bdocker\s+push\b",

@@ -23,8 +23,20 @@ Quiet window ON
 Quiet window OFF   →  shipping continues
 ```
 
+<img src="docs/assets/proof.jpg" alt="Proof from a live run: quiet window on, ship attempt, Hermes asks first" width="100%" />
+
+### Try it
+
+```bash
+hermes plugins install arults/hermes-changefreeze --enable
+```
+
+Pin the reviewed SHA from the [hackathon listing](https://github.com/NousResearch/hermes-agent/pull/149474) when you want a frozen tip.
+
+Checks this session: `hermes plugins validate` **passed** (security **safe**) · `doctor` **OK** (5 tools, 1 hook) · unit tests **15/15** · [Evidence](docs/EVIDENCE.md).
+
 Local only. Nothing leaves your machine.
 
-**[Short demo](https://github.com/arults/hermes-changefreeze/releases/download/v0.1.0-demo/changefreeze-demo.mp4)** · [Hackathon listing](https://github.com/NousResearch/hermes-agent/pull/149474)
+**[Short demo](https://github.com/arults/hermes-changefreeze/releases/download/v0.1.0-demo/changefreeze-demo.mp4)** · **[X demo](https://x.com/PostcardCrypto/status/2118326708936040613)** · [Hackathon listing](https://github.com/NousResearch/hermes-agent/pull/149474)
 
 MIT · https://github.com/arults/hermes-changefreeze
