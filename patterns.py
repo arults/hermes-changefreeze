@@ -1,5 +1,6 @@
 """Deterministic shell-arg patterns that count as change/deploy actions during a freeze."""
 from __future__ import annotations
+import ast
 import re
 from typing import Iterable
 
@@ -27,13 +28,23 @@ DEFAULT_PATTERNS: list[str] = [
 ]
 
 # Tools whose arguments we inspect (Hermes built-ins / common names).
+# execute_code is included so a code cell is scanned the same way as a shell
+# command. This is a text check, not a sandbox: words built from pieces or
+# encoding are not reconstructed.
 WATCHED_TOOLS = frozenset({
     "shell_exec",
     "terminal",
     "run_terminal_command",
     "execute_bash",
     "bash",
+    "execute_code",
 })
+
+# Quotes, brackets, and commas sit between argv words in Python literals such
+# as subprocess.run(["git", "push"]). Stripped only for a second text pass.
+_ARGV_LITERAL_PUNCT = re.compile(r"[\[\]\{\},\"'`]+")
+# Skip the parser on huge cells so a single tool call cannot stall the hook.
+_MAX_PARSE_CHARS = 100_000
 
 
 def _flatten_args(args: dict | None) -> str:
@@ -58,21 +69,78 @@ def _flatten_args(args: dict | None) -> str:
     return " ".join(parts)
 
 
+def _is_watched(tool_name: str) -> bool:
+    name = (tool_name or "").strip()
+    if not name:
+        return False
+    base = name.split(":")[-1].split(".")[-1]
+    if base == "execute_code" or name in WATCHED_TOOLS or name.endswith("shell_exec"):
+        return True
+    lower = name.lower()
+    return "shell" in lower or "terminal" in lower or "bash" in lower
+
+
+def _literal_command_texts(text: str) -> list[str]:
+    """String constants and literal argv lists, so a comment between words still counts.
+
+    Parse failures return nothing. Concatenation, encoding, and variables are not folded.
+    """
+    if len(text) > _MAX_PARSE_CHARS:
+        return []
+    try:
+        tree = ast.parse(text)
+    except (SyntaxError, ValueError, RecursionError):
+        return []
+    found: list[str] = []
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Constant) and isinstance(node.value, str) and node.value.strip():
+            found.append(node.value)
+        elif isinstance(node, (ast.List, ast.Tuple)):
+            parts: list[str] = []
+            literal = True
+            for elt in node.elts:
+                if isinstance(elt, ast.Constant) and isinstance(elt.value, str):
+                    parts.append(elt.value)
+                else:
+                    literal = False
+                    break
+            if literal and parts:
+                found.append(" ".join(parts))
+    return found
+
+
+def _texts_to_scan(text: str) -> list[str]:
+    if not text or not text.strip():
+        return []
+    texts = [text]
+    normalized = _ARGV_LITERAL_PUNCT.sub(" ", text)
+    if normalized != text:
+        texts.append(normalized)
+    for extra in _literal_command_texts(text):
+        if extra not in texts:
+            texts.append(extra)
+    return texts
+
+
 def matches_change_pattern(
     tool_name: str,
     args: dict | None,
     patterns: Iterable[str] | None = None,
 ) -> tuple[bool, str | None]:
-    """Return (matched, pattern_or_None). Only watches shell-like tools."""
-    name = (tool_name or "").strip()
-    if name not in WATCHED_TOOLS and not name.endswith("shell_exec"):
-        # Also catch namespaced plugin tools that look like shell
-        if "shell" not in name.lower() and "terminal" not in name.lower() and "bash" not in name.lower():
-            return False, None
-    text = _flatten_args(args)
-    if not text.strip():
+    """Return (matched, pattern_or_None).
+
+    Watches shell-like tools and Hermes `execute_code` (its `code` argument is
+    one of the flattened fields). A second pass drops quotes and argv-list
+    punctuation so `subprocess.run(["git", "push"])` matches the same patterns
+    as `git push`. Obfuscated commands are outside this check.
+    """
+    if not _is_watched(tool_name):
         return False, None
-    for pat in (patterns if patterns is not None else DEFAULT_PATTERNS):
-        if re.search(pat, text, flags=re.IGNORECASE):
-            return True, pat
+    texts = _texts_to_scan(_flatten_args(args))
+    if not texts:
+        return False, None
+    for text in texts:
+        for pat in (patterns if patterns is not None else DEFAULT_PATTERNS):
+            if re.search(pat, text, flags=re.IGNORECASE):
+                return True, pat
     return False, None

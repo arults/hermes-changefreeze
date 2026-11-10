@@ -14,6 +14,16 @@
 2. Hermes asks before shipping in those hours.  
 3. Chat and planning keep working.
 
+### Good to know
+
+You end the quiet window, or you let one ship through. The helper can turn a window on, make it longer, or make it stricter. It cannot turn it off, make it shorter, or approve a ship by itself.
+
+You type `/freeze off` to end it. You type `/freeze allow-once` and the command to let one ship through.
+
+Hermes reads the text of the terminal command and the text of a code cell. If a ship command is written there — in one piece, or split into quoted words the way Python's subprocess does — Hermes asks you first. A code cell that says `subprocess.run(["git", "push"])` is one of those.
+
+If the words are built from pieces, encoded, or hidden, this check does not see them. It is not a sealed box.
+
 ### Example from a real run
 
 ```text
@@ -33,7 +43,7 @@ hermes plugins install arults/hermes-changefreeze --enable
 
 Pin the reviewed SHA from the [hackathon listing](https://github.com/NousResearch/hermes-agent/pull/149474) when you want a frozen tip.
 
-Checks this session: `hermes plugins validate` **passed** (security **safe**) · `doctor` **OK** (5 tools, 1 hook) · unit tests **15/15** · [Evidence](docs/EVIDENCE.md).
+An earlier install check passed validate and doctor. Unit tests for this revision are in [Evidence](docs/EVIDENCE.md). Run validate and doctor again after you install this revision.
 
 Local only. Nothing leaves your machine.
 
