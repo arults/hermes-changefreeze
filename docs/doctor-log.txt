@@ -1,5 +1,10 @@
-Plugin Doctor: 
-/workspace/forge/lab/2026-11-05/hermes-plugin/.hermes-home/plugins/changefreeze
+# hermes plugins doctor /workspace --ci
+# Hermes Agent v0.23.1 (2026.9.24) · stable · local 3b4215785882
+# Python 3.14.9
+# 2026-11-10T03:50:51Z
+# exit 0
+
+Plugin Doctor: /workspace
   manifest: changefreeze 0.1.0 (standalone)
   OK: runtime discovery, manifest parsing, import, and registration passed
-  registrations: 5 tool(s), 1 hook(s)
+  registrations: 4 tool(s), 1 hook(s)

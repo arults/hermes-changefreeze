@@ -273,6 +273,51 @@ def test_shared_plugin_storage_is_one_freeze_across_contexts():
                 sys.modules[key] = value
 
 
+def test_freeze_on_clears_expired_and_future_until():
+    ctx = _fresh()
+    ctx.commands["freeze"]("until 2000-01-01T00:00:00Z block old")
+    status = ctx.tools["changefreeze_status"]({})
+    assert status["active_window"] is False
+    assert status["state"]["until"] == "2000-01-01T00:00:00Z"
+    assert _push(ctx) is None
+    revived = ctx.commands["freeze"]("on block revived")
+    assert "open-ended" in revived and "until=None" in revived
+    status = ctx.tools["changefreeze_status"]({})
+    assert status["state"]["until"] is None
+    assert status["active_window"] is True
+    assert status["state"]["mode"] == "block"
+    assert "until=None" in ctx.commands["freeze"]("status")
+    assert _push(ctx)["action"] == "block"
+    refused = ctx.tools["changefreeze_set"]({"until": "2099-01-01T00:00:00Z"})
+    assert refused["ok"] is False and "open-ended" in refused["error"]
+    assert ctx.tools["changefreeze_status"]({})["state"]["until"] is None
+
+    ctx.commands["freeze"]("until 2099-01-01T00:00:00Z block scheduled")
+    assert ctx.tools["changefreeze_status"]({})["state"]["until"] == "2099-01-01T00:00:00Z"
+    assert _push(ctx)["action"] == "block"
+    opened = ctx.commands["freeze"]("on block still")
+    assert "until=None" in opened
+    status = ctx.tools["changefreeze_status"]({})
+    assert status["state"]["until"] is None
+    assert status["active_window"] is True
+    assert status["state"]["mode"] == "block"
+    assert _push(ctx)["action"] == "block"
+    # Reuse: a later /freeze until sets a new end, and a past one can be revived again.
+    reused = ctx.commands["freeze"]("until 2099-06-01T00:00:00Z block later")
+    assert "2099-06-01T00:00:00Z" in reused
+    assert ctx.tools["changefreeze_status"]({})["state"]["until"] == "2099-06-01T00:00:00Z"
+    assert _push(ctx)["action"] == "block"
+    ctx.commands["freeze"]("until 1999-01-01T00:00:00Z block done")
+    assert ctx.tools["changefreeze_status"]({})["active_window"] is False
+    assert _push(ctx) is None
+    ctx.commands["freeze"]("on")
+    status = ctx.tools["changefreeze_status"]({})
+    assert status["state"]["until"] is None
+    assert status["active_window"] is True
+    assert status["state"]["mode"] == "approve"
+    assert _push(ctx)["action"] == "approve"
+
+
 def test_bad_user_until_is_rejected():
     ctx = _fresh()
     reply = ctx.commands["freeze"]("until not-a-date")

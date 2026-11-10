@@ -353,6 +353,34 @@ def test_user_set_freeze_can_still_loosen():
     assert not is_window_active(state)
 
 
+def test_open_ended_clears_expired_and_future_until():
+    """`/freeze on` uses clear_until so the reply matches the window."""
+    now = datetime(2030, 6, 1, tzinfo=timezone.utc)
+    expired = set_freeze(FreezeState(), until="2000-01-01T00:00:00Z", reason="old", mode="block")
+    assert not is_window_active(expired, now=now)
+    assert decide_pre_tool_call(expired, "shell_exec", {"command": "git push"}, now=now) is None
+    # until=None without clear_until keeps the old end. That was the bug.
+    set_freeze(expired, until=None, reason="still old", mode="block", active=True)
+    assert expired.until == "2000-01-01T00:00:00Z"
+    assert not is_window_active(expired, now=now)
+    set_freeze(expired, clear_until=True, reason="revived", mode="block", active=True)
+    assert expired.until is None and expired.mode == "block" and expired.active
+    assert is_window_active(expired, now=now)
+    assert decide_pre_tool_call(expired, "shell_exec", {"command": "git push"}, now=now)["action"] == "block"
+
+    future = set_freeze(FreezeState(), until="2099-01-01T00:00:00Z", reason="sched", mode="block")
+    assert is_window_active(future, now=now)
+    set_freeze(future, clear_until=True, reason="open", mode="block", active=True)
+    assert future.until is None
+    assert is_window_active(future, now=now)
+    assert decide_pre_tool_call(future, "execute_code", {"code": 'subprocess.run(["git","push"])'}, now=now)["action"] == "block"
+    # The user can put a new end on after the open window.
+    set_freeze(future, until="2099-06-01T00:00:00Z", reason="later", mode="block", active=True)
+    assert future.until == "2099-06-01T00:00:00Z"
+    assert is_window_active(future, now=now)
+    assert decide_pre_tool_call(future, "shell_exec", {"command": "git push"}, now=now)["action"] == "block"
+
+
 def test_block_mode_message_names_plugin():
     until = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
     state = set_freeze(FreezeState(), until=until, reason="launch freeze", mode="block")

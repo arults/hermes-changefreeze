@@ -96,10 +96,18 @@ def set_freeze(
     reason: str = "",
     mode: str | None = None,
     active: bool = True,
+    clear_until: bool = False,
 ) -> FreezeState:
-    """User `/freeze` path. May loosen: shorten, end, or lower block to approve."""
+    """User `/freeze` path. May loosen: shorten, end, or lower block to approve.
+
+    `until=None` leaves the current end unchanged. `/freeze on` passes
+    `clear_until=True` so a previous end, expired or still in the future, is
+    dropped and the window is actually open-ended.
+    """
     state.active = active
-    if until is not None:
+    if clear_until:
+        state.until = None
+    elif until is not None:
         # validate
         _parse_iso(until) if until else None
         state.until = until

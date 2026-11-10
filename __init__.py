@@ -263,10 +263,12 @@ def register(ctx):
                 mode = rest[0]
                 rest = rest[1:]
             reason = " ".join(rest) or "manual freeze"
-            set_freeze(state, until=None, reason=reason, mode=mode, active=True)
+            # Drop any previous end. until=None alone would keep an expired or
+            # future timestamp while this reply says the window is open-ended.
+            set_freeze(state, until=None, reason=reason, mode=mode, active=True, clear_until=True)
             _save_state(ctx, state)
             _record(ctx, event="set", action=mode, message=reason)
-            return f"ChangeFreeze ON (open-ended) mode={mode} reason={reason!r}"
+            return f"ChangeFreeze ON (open-ended) mode={mode} until=None reason={reason!r}"
         if parts[0] == "until" and len(parts) >= 2:
             until = parts[1]
             mode = "approve"

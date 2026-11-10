@@ -16,13 +16,15 @@
 
 ### Good to know
 
-You end the quiet window, or you let one ship through. The helper can turn a window on, make it longer, or make it stricter. It cannot turn it off, make it shorter, or approve a ship by itself.
+You start a window with no end time by typing `/freeze on`. You set an end time with `/freeze until`. You end the window with `/freeze off`. You let one ship through with `/freeze allow-once` and the command.
 
-You type `/freeze off` to end it. You type `/freeze allow-once` and the command to let one ship through.
+The ChangeFreeze tools the helper can call cannot turn that window off, make it shorter, or allow a ship. You do those.
 
-Hermes reads the text of the terminal command and the text of a code cell. If a ship command is written there — in one piece, or split into quoted words the way Python's subprocess does — Hermes asks you first. A code cell that says `subprocess.run(["git", "push"])` is one of those.
+That is not the whole story. If the helper can edit files or run a shell command, it can change the saved `state.json` or `allowlist.json` and undo the window that way. This plugin does not block those edits.
 
-If the words are built from pieces, encoded, or hidden, this check does not see them. It is not a sealed box.
+Hermes reads the text of the terminal command and the text of a code cell. If a ship command is written there — in one piece, or as quoted words the way Python's subprocess does — Hermes asks you first. A code cell that says `subprocess.run(["git", "push"])` is one of those.
+
+If the words are built from pieces, encoded, or hidden, this check does not see them. It is a text check, not a sandbox.
 
 ### Example from a real run
 
@@ -43,7 +45,7 @@ hermes plugins install arults/hermes-changefreeze --enable
 
 Pin the reviewed SHA from the [hackathon listing](https://github.com/NousResearch/hermes-agent/pull/149474) when you want a frozen tip.
 
-An earlier install check passed validate and doctor. Unit tests for this revision are in [Evidence](docs/EVIDENCE.md). Run validate and doctor again after you install this revision.
+What this revision was checked with is in [Evidence](docs/EVIDENCE.md).
 
 Local only. Nothing leaves your machine.
 
