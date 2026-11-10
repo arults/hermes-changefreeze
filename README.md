@@ -24,7 +24,7 @@ That is not the whole story. If the helper can edit files or run a shell command
 
 Hermes reads the text of the terminal command and the text of a code cell. If a ship command is written there — in one piece, or as quoted words the way Python's subprocess does — Hermes asks you first. A code cell that says `subprocess.run(["git", "push"])` is one of those.
 
-If the words are built from pieces, encoded, or hidden, this check does not see them. It is a text check, not a sandbox.
+If the words are built from pieces, encoded, or hidden, this check does not see them. It is a text check, not a sandbox. `git -C <dir> push` and `git -c <opt> push` are also missed.
 
 ### Example from a real run
 
