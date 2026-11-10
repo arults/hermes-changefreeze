@@ -29,17 +29,23 @@ class MockCtx:
     def register_hook(self, name, fn): self.hooks[name] = fn
     def register_tool(self, name, description="", schema=None, handler=None, **kw): self.tools[name] = handler
     def register_command(self, name, handler=None, description="", args_hint=""): self.commands[name] = handler
-    def register_skill(self, path): self.skills.append(path)
+    def register_skill(self, name, path, description="", **kwargs):
+        self.skills.append((name, path, description))
 
 def main():
     ctx = MockCtx()
     module.register(ctx)
     assert "pre_tool_call" in ctx.hooks
-    assert set(ctx.tools) >= {"changefreeze_set", "changefreeze_status", "changefreeze_ledger", "changefreeze_allow_once", "changefreeze_patterns"}
+    assert set(ctx.tools) >= {"changefreeze_set", "changefreeze_status", "changefreeze_ledger", "changefreeze_patterns"}
+    assert "changefreeze_allow_once" not in ctx.tools
     assert "freeze" in ctx.commands
+    assert ctx.skills and ctx.skills[0][0] == "changefreeze"
+    assert Path(ctx.skills[0][1]).name == "SKILL.md"
     ctx.tools["changefreeze_set"]({"until":"2099-01-01T00:00:00Z", "reason":"demo", "mode":"approve"})
     d = ctx.hooks["pre_tool_call"](tool_name="shell_exec", args={"command": "git push origin main"})
     assert d and d["action"] == "approve", d
+    dcode = ctx.hooks["pre_tool_call"](tool_name="execute_code", args={"code": 'subprocess.run(["git", "push"])'})
+    assert dcode and dcode["action"] == "approve", dcode
     assert ctx.hooks["pre_tool_call"](tool_name="shell_exec", args={"command": "echo hi"}) is None
     assert ctx.tools["changefreeze_status"]({})["active_window"] is True
     print("PASS register smoke: hook approve on git push, allow echo")
@@ -52,9 +58,9 @@ def main():
     print("PASS /freeze off clears gate")
     ctx.tools["changefreeze_set"]({"until":"2099-01-01T00:00:00Z", "reason":"hard", "mode":"block"})
     assert ctx.hooks["pre_tool_call"](tool_name="shell_exec", args={"command": "npm publish"})["action"] == "block"
-    ctx.tools["changefreeze_allow_once"]({"command":"npm publish"})
+    assert "allowed once" in ctx.commands["freeze"]("allow-once npm publish").lower()
     assert ctx.hooks["pre_tool_call"](tool_name="shell_exec", args={"command": "npm publish"}) is None
-    print("PASS allow_once escape")
+    print("PASS /freeze allow-once escape")
     print("ALL SMOKE OK")
 
 if __name__ == "__main__":

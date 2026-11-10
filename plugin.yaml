@@ -10,7 +10,6 @@ provides_tools:
   - changefreeze_set
   - changefreeze_status
   - changefreeze_ledger
-  - changefreeze_allow_once
   - changefreeze_patterns
 provides_hooks:
   - pre_tool_call

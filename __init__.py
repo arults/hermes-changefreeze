@@ -8,6 +8,7 @@ from .freeze import (
     decide_pre_tool_call,
     decide_with_allowlist,
     set_freeze,
+    strengthen_freeze,
     clear_freeze,
     is_window_active,
 )
@@ -48,9 +49,7 @@ def _save_state(ctx, state: FreezeState) -> None:
 
 
 def _load_allow(ctx) -> Allowlist:
-    cached = getattr(ctx, "_changefreeze_allow", None)
-    if isinstance(cached, Allowlist):
-        return cached
+    # File first, same as freeze state, so two contexts cannot clobber a shared allowlist.
     try:
         from plugins.plugin_storage import plugin_data_dir  # type: ignore
         path = plugin_data_dir(PLUGIN_NAME) / "allowlist.json"
@@ -58,6 +57,9 @@ def _load_allow(ctx) -> Allowlist:
             return Allowlist.from_dict(json.loads(path.read_text(encoding="utf-8")))
     except Exception:
         pass
+    cached = getattr(ctx, "_changefreeze_allow", None)
+    if isinstance(cached, Allowlist):
+        return cached
     return Allowlist()
 
 
@@ -71,18 +73,27 @@ def _save_allow(ctx, allow: Allowlist) -> None:
     except Exception:
         pass
 
-def _ledger(ctx) -> FileLedger:
+def _ledger(ctx) -> FileLedger | None:
+    """Hermes plugin storage only.
+
+    plugin_data_dir follows the active Hermes home, including profiles.
+    Falling back to the default home directory writes the wrong profile and
+    creates that directory when Hermes is not importable. Callers skip the
+    ledger when storage is not available.
+    """
     try:
         from plugins.plugin_storage import plugin_data_dir  # type: ignore
         return FileLedger(plugin_data_dir(PLUGIN_NAME) / "ledger.jsonl")
     except Exception:
-        from pathlib import Path
-        return FileLedger(Path.home() / ".hermes" / "plugin-data" / PLUGIN_NAME / "ledger.jsonl")
+        return None
 
 
 def _record(ctx, event: str, tool_name: str = "", action: str = "", message: str = "", detail: dict | None = None):
     try:
-        _ledger(ctx).append(
+        ledger = _ledger(ctx)
+        if ledger is None:
+            return
+        ledger.append(
             LedgerEntry(
                 ts=now_iso(),
                 event=event,
@@ -118,14 +129,27 @@ def register(ctx):
 
     def tool_set(args: dict, **kwargs):
         args = args or {}
-        until = str(args.get("until") or "").strip()
+        until_raw = args.get("until", None)
+        until = None if until_raw is None else str(until_raw).strip()
+        if until == "":
+            until = None
         reason = str(args.get("reason") or "")
-        mode = str(args.get("mode") or "approve")
+        if "mode" not in args or args.get("mode") in (None, ""):
+            mode = None
+        else:
+            mode = str(args.get("mode")).strip().lower()
         state = _load_state(ctx)
-        until_val = until or None
-        set_freeze(state, until=until_val, reason=reason or state.reason, mode=mode or "approve", active=True)
+        error = strengthen_freeze(
+            state,
+            until=until,
+            reason=reason or state.reason,
+            mode=mode,
+        )
+        if error:
+            _record(ctx, event="set_refused", action=str(mode or ""), message=error)
+            return {"ok": False, "error": error, "state": state.to_dict()}
         _save_state(ctx, state)
-        _record(ctx, event="set", action=mode, message=f"until={until_val} reason={reason}")
+        _record(ctx, event="set", action=state.mode, message=f"until={state.until} reason={state.reason}")
         return {"ok": True, "state": state.to_dict()}
 
     def tool_status(args: dict | None = None, **kwargs):
@@ -140,20 +164,11 @@ def register(ctx):
     def tool_ledger(args: dict | None = None, **kwargs):
         args = args or {}
         limit = int(args.get("limit") or 20)
-        rows = _ledger(ctx).recent(limit)
+        ledger = _ledger(ctx)
+        if ledger is None:
+            return {"ok": True, "rows": [], "note": "ledger storage unavailable"}
+        rows = ledger.recent(limit)
         return {"ok": True, "rows": rows}
-
-    def tool_allow_once(args: dict, **kwargs):
-        args = args or {}
-        tool_name = str(args.get("tool_name") or "shell_exec")
-        command = str(args.get("command") or "")
-        allow = _load_allow(ctx)
-        call_args = {"command": command}
-        fp = fingerprint(tool_name, call_args)
-        allow.allow_once(fp)
-        _save_allow(ctx, allow)
-        _record(ctx, event="allow_once", tool_name=tool_name, action="allow", message=command[:200], detail={"fp": fp})
-        return {"ok": True, "fingerprint": fp, "note": "Next matching call with same tool+command is allowed once"}
 
     def tool_patterns(args: dict | None = None, **kwargs):
         state = _load_state(ctx)
@@ -164,18 +179,27 @@ def register(ctx):
     ctx.register_tool(
         name="changefreeze_set",
         toolset=TOOLSET,
-        description="Activate a change freeze window. Blocks/approves deploy-push shell commands until the window ends.",
+        description=(
+            "Start or tighten a change freeze. Can turn a window on, move its end later, "
+            "or raise approve to block. Cannot shorten, end, or lower block to approve, "
+            "and cannot allow a command. Omit mode to keep the current mode. "
+            "The user loosens the window with /freeze."
+        ),
         schema={
             "name": "changefreeze_set",
-            "description": "Activate a change freeze window for deploy/push shell commands.",
+            "description": (
+                "Start or tighten a change freeze for deploy/push commands and code cells. "
+                "Omit mode to keep the current mode. A finite until cannot be earlier than now "
+                "or earlier than the current end. Open-ended windows stay open-ended unless the user runs /freeze."
+            ),
             "parameters": {
                 "type": "object",
                 "properties": {
-                    "until": {"type": "string", "description": "ISO-8601 UTC end time, e.g. 2099-01-01T00:00:00Z"},
+                    "until": {"type": "string", "description": "ISO-8601 end time, e.g. 2099-01-01T00:00:00Z. Omit to keep the current end."},
                     "reason": {"type": "string", "description": "Why the freeze is on"},
-                    "mode": {"type": "string", "enum": ["approve", "block"], "description": "approve=escalate to human; block=hard veto"},
+                    "mode": {"type": "string", "enum": ["approve", "block"], "description": "approve=escalate to human; block=hard veto. Omit to keep the current mode."},
                 },
-                "required": ["until"],
+                "required": [],
             },
         },
         handler=tool_set,
@@ -204,24 +228,6 @@ def register(ctx):
             },
         },
         handler=tool_ledger,
-    )
-    ctx.register_tool(
-        name="changefreeze_allow_once",
-        toolset=TOOLSET,
-        description="Allow the next matching shell command once during an active freeze (escape hatch after human review).",
-        schema={
-            "name": "changefreeze_allow_once",
-            "description": "Allow one matching shell command once during a freeze.",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "tool_name": {"type": "string", "description": "Usually shell_exec"},
-                    "command": {"type": "string", "description": "Exact command string to allow once"},
-                },
-                "required": ["command"],
-            },
-        },
-        handler=tool_allow_once,
     )
     ctx.register_tool(
         name="changefreeze_patterns",
@@ -257,10 +263,12 @@ def register(ctx):
                 mode = rest[0]
                 rest = rest[1:]
             reason = " ".join(rest) or "manual freeze"
-            set_freeze(state, until=None, reason=reason, mode=mode, active=True)
+            # Drop any previous end. until=None alone would keep an expired or
+            # future timestamp while this reply says the window is open-ended.
+            set_freeze(state, until=None, reason=reason, mode=mode, active=True, clear_until=True)
             _save_state(ctx, state)
             _record(ctx, event="set", action=mode, message=reason)
-            return f"ChangeFreeze ON (open-ended) mode={mode} reason={reason!r}"
+            return f"ChangeFreeze ON (open-ended) mode={mode} until=None reason={reason!r}"
         if parts[0] == "until" and len(parts) >= 2:
             until = parts[1]
             mode = "approve"
@@ -276,8 +284,36 @@ def register(ctx):
             _save_state(ctx, state)
             _record(ctx, event="set", action=mode, message=f"until={until} {reason}")
             return f"ChangeFreeze until {until} mode={mode} reason={reason!r}"
+        if parts[0] in ("allow-once", "allow_once"):
+            rest = parts[1:]
+            tool_name = "shell_exec"
+            if rest and rest[0] == "--tool":
+                if len(rest) < 3:
+                    return "Usage: /freeze allow-once [--tool NAME] <command>"
+                tool_name = rest[1]
+                rest = rest[2:]
+            command = " ".join(rest).strip()
+            if not command:
+                return "Usage: /freeze allow-once [--tool NAME] <command>"
+            call_args = {"code": command} if tool_name == "execute_code" else {"command": command}
+            allow = _load_allow(ctx)
+            fp = fingerprint(tool_name, call_args)
+            allow.allow_once(fp)
+            _save_allow(ctx, allow)
+            _record(
+                ctx,
+                event="allow_once",
+                tool_name=tool_name,
+                action="allow",
+                message=command[:200],
+                detail={"fp": fp},
+            )
+            return f"Next {tool_name} call matching that command is allowed once."
         if parts[0] == "ledger":
-            rows = _ledger(ctx).recent(10)
+            ledger = _ledger(ctx)
+            if ledger is None:
+                return "(ledger unavailable)"
+            rows = ledger.recent(10)
             if not rows:
                 return "(ledger empty)"
             return "\n".join(
@@ -287,22 +323,41 @@ def register(ctx):
         if parts[0] == "patterns":
             return "\n".join(DEFAULT_PATTERNS)
         return (
-            "Usage: /freeze status|on [approve|block] [reason]|until <iso> [approve|block] [reason]|off|ledger|patterns"
+            "Usage: /freeze status|on [approve|block] [reason]|until <iso> [approve|block] [reason]"
+            "|allow-once [--tool NAME] <command>|off|ledger|patterns"
         )
 
 
     ctx.register_command(
         "freeze",
         handler=cmd_freeze,
-        description="Change freeze windows: /freeze on|until|off|status|ledger|patterns",
-        args_hint="on|until <iso>|off|status|ledger|patterns",
+        description="Change freeze windows: /freeze on|until|allow-once|off|status|ledger|patterns",
+        args_hint="on|until <iso>|allow-once <command>|off|status|ledger|patterns",
     )
 
-    # optional bundled skill
+    # Bundled skill. Upstream ctx.register_skill(name, path, description="")
+    # (hermes_cli.plugins_content). The name is the skill id, not the file path.
     try:
         from pathlib import Path
         skill = Path(__file__).parent / "skill" / "SKILL.md"
         if skill.exists():
-            ctx.register_skill(str(skill))
-    except Exception:
+            ctx.register_skill("changefreeze", skill, _skill_blurb(skill))
+    except AttributeError:
         pass
+
+
+def _skill_blurb(path) -> str:
+    """Description from SKILL.md frontmatter, for register_skill's description argument."""
+    try:
+        text = path.read_text(encoding="utf-8")
+    except OSError:
+        return ""
+    if not text.startswith("---"):
+        return ""
+    end = text.find("\n---", 3)
+    if end == -1:
+        return ""
+    for line in text[3:end].splitlines():
+        if line.lower().startswith("description:"):
+            return line.split(":", 1)[1].strip().strip("\"'")
+    return ""

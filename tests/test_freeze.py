@@ -7,7 +7,14 @@ from datetime import datetime, timezone, timedelta
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 
-from freeze import FreezeState, decide_pre_tool_call, set_freeze, clear_freeze, is_window_active
+from freeze import (
+    FreezeState,
+    decide_pre_tool_call,
+    set_freeze,
+    strengthen_freeze,
+    clear_freeze,
+    is_window_active,
+)
 from patterns import matches_change_pattern
 
 
@@ -109,6 +116,269 @@ def test_cargo_publish_and_fly_deploy():
 def test_non_deploy_curl_allowed():
     ok, _ = matches_change_pattern("shell_exec", {"command": "curl https://example.com/health"})
     assert not ok
+
+
+def test_execute_code_subprocess_list_matches():
+    code = 'subprocess.run(["git", "push"])'
+    ok, pat = matches_change_pattern("execute_code", {"code": code})
+    assert ok and "git" in pat
+
+
+def test_execute_code_common_forms_match():
+    samples = [
+        'subprocess.run(["git", "push"])',
+        "subprocess.run(['git', 'push'])",
+        'subprocess.run(["git", "push", "origin", "main"], check=True)',
+        'subprocess.call(["git", "push"])',
+        'subprocess.check_call(["git", "push"])',
+        'subprocess.check_output(["git", "push"])',
+        'subprocess.Popen(["git", "push"])',
+        'subprocess.run("git push origin main", shell=True)',
+        'subprocess.Popen("git push", shell=True)',
+        'os.system("git push origin main")',
+        "os.popen('git push')",
+        'os.execvp("git", ["git", "push"])',
+        'terminal("git push origin main")',
+        'from hermes_tools import terminal\nterminal("git push origin main")',
+        'cmd = ["git", "push"]\nsubprocess.run(cmd)',
+        'subprocess.run([\n    "git",\n    "push",\n    "origin",\n    "main",\n])',
+        'subprocess.run(["git", # noqa\n"push"])',
+        'subprocess.run(("git", "push"))',
+        'subprocess.run(["kubectl", "apply", "-f", "deploy.yaml"])',
+        'subprocess.run(["helm", "upgrade", "api", "./chart"])',
+        'subprocess.run(["npm", "publish", "--access", "public"])',
+        'subprocess.run(["gh", "pr", "merge", "1"])',
+        'subprocess.run(["docker", "push", "my/img:1"])',
+        'subprocess.run(["terraform", "apply", "-auto-approve"])',
+        'subprocess.run(["fly", "deploy"])',
+        '''python -c 'subprocess.run(["git","push"])' ''',
+    ]
+    for code in samples:
+        ok, pat = matches_change_pattern("execute_code", {"code": code})
+        assert ok and pat, code
+
+
+def test_execute_code_ordinary_and_non_deploy_do_not_match():
+    samples = [
+        'print("hello")',
+        'subprocess.run(["git", "status"])',
+        'subprocess.run(["git", "diff"])',
+        'subprocess.run(["ls", "-la"])',
+        'os.system("echo hello")',
+        "x = 1 + 2",
+    ]
+    for code in samples:
+        ok, pat = matches_change_pattern("execute_code", {"code": code})
+        assert not ok and pat is None, code
+
+
+def test_split_or_encoded_command_is_not_matched():
+    """Honest bound: this is a text check, not a sandbox."""
+    samples = [
+        'subprocess.run(["gi" + "t", "pu" + "sh"])',
+        'a = "git"\nb = "push"\nsubprocess.run([a, b])',
+        'import base64, subprocess\nsubprocess.run([base64.b64decode("Z2l0").decode(), base64.b64decode("cHVzaA==").decode()])',
+    ]
+    for code in samples:
+        ok, _ = matches_change_pattern("execute_code", {"code": code})
+        assert not ok, code
+
+
+def test_shell_python_c_argv_form_matches_but_ordinary_shell_does_not():
+    ok, _ = matches_change_pattern(
+        "shell_exec",
+        {"command": '''python -c 'subprocess.run(["git","push"])' '''},
+    )
+    assert ok
+    assert not matches_change_pattern("shell_exec", {"command": "echo hello"})[0]
+    assert not matches_change_pattern("shell_exec", {"command": "git status"})[0]
+    assert not matches_change_pattern("shell_exec", {"command": "python -c 'print(1)'"})[0]
+    # Words split only by quotes are treated as the command. A print of those
+    # words is gated too; echo hello is not.
+    assert matches_change_pattern(
+        "shell_exec",
+        {"command": 'echo subprocess.run(["git","push"])'},
+    )[0]
+
+
+def test_execute_code_block_and_approve_semantics():
+    until = (datetime.now(timezone.utc) + timedelta(days=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    code = 'subprocess.run(["git", "push"])'
+    blocked = set_freeze(FreezeState(), until=until, reason="hard", mode="block")
+    d = decide_pre_tool_call(blocked, "execute_code", {"code": code})
+    assert d and d["action"] == "block"
+    asked = set_freeze(FreezeState(), until=until, reason="ask", mode="approve")
+    d2 = decide_pre_tool_call(asked, "execute_code", {"code": code})
+    assert d2 and d2["action"] == "approve"
+
+
+def test_allowed_commands_pass_during_block():
+    state = set_freeze(FreezeState(), until="2099-01-01T00:00:00Z", reason="x", mode="block")
+    for cmd in ("echo hello", "git status", "git diff", "curl https://example.com/health"):
+        assert decide_pre_tool_call(state, "shell_exec", {"command": cmd}) is None, cmd
+    assert decide_pre_tool_call(state, "execute_code", {"code": "print('hello')"}) is None
+    assert decide_pre_tool_call(
+        state, "execute_code", {"code": 'subprocess.run(["git", "status"])'}
+    ) is None
+    assert decide_pre_tool_call(state, "shell_exec", {"command": "git push origin main"})["action"] == "block"
+
+
+def test_past_expiry_allows_shell_and_code():
+    state = FreezeState(active=True, until="2020-01-01T03:00:00+09:00", mode="block", reason="done")
+    assert not is_window_active(state)
+    assert decide_pre_tool_call(state, "shell_exec", {"command": "git push"}) is None
+    assert decide_pre_tool_call(
+        state, "execute_code", {"code": 'subprocess.run(["git","push"])'}
+    ) is None
+
+
+def test_future_offset_keeps_window_active():
+    state = FreezeState(active=True, until="2099-01-01T00:00:00+09:00", mode="block")
+    assert is_window_active(state)
+    d = decide_pre_tool_call(state, "execute_code", {"code": 'subprocess.run(["git","push"])'})
+    assert d and d["action"] == "block"
+
+
+def test_strengthen_refuses_past_until_without_mutating():
+    now = datetime(2030, 1, 1, 12, 0, tzinfo=timezone.utc)
+    state = FreezeState(active=True, until="2030-02-01T00:00:00Z", mode="block", reason="prod")
+    before = state.to_dict()
+    err = strengthen_freeze(state, until="2020-01-01T00:00:00Z", now=now)
+    assert err and "later than now" in err
+    assert state.to_dict() == before
+    assert is_window_active(state, now=now)
+
+
+def test_strengthen_refuses_until_equal_to_now():
+    now = datetime(2030, 1, 1, 12, 0, tzinfo=timezone.utc)
+    state = FreezeState(active=True, until="2030-02-01T00:00:00Z", mode="block", reason="prod")
+    before = state.to_dict()
+    err = strengthen_freeze(state, until="2030-01-01T12:00:00Z", now=now)
+    assert err and "later than now" in err
+    assert state.to_dict() == before
+
+
+def test_strengthen_refuses_earlier_instant_hidden_by_offset():
+    state = FreezeState(active=True, until="2099-06-01T00:00:00Z", mode="block", reason="prod")
+    before = state.to_dict()
+    # 08:00 at +09:00 is 23:00 the previous UTC day — sooner, even though the clock looks later.
+    err = strengthen_freeze(state, until="2099-06-01T08:00:00+09:00")
+    assert err and "sooner" in err
+    assert state.to_dict() == before
+
+
+def test_strengthen_allows_equal_and_later_instants_and_keeps_mode():
+    now = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    state = FreezeState(active=True, until="2099-06-01T00:00:00Z", mode="block", reason="prod")
+    err = strengthen_freeze(state, until="2099-06-01T09:00:00+09:00", mode=None, now=now)
+    assert err is None
+    assert state.mode == "block"
+    assert state.until == "2099-06-01T09:00:00+09:00"
+    err = strengthen_freeze(state, until="2099-06-01T10:00:00+09:00", mode=None, now=now)
+    assert err is None
+    assert state.mode == "block"
+    # Naive timestamps are UTC, same as the Z form.
+    state.until = "2030-06-01T00:00:00Z"
+    err = strengthen_freeze(state, until="2030-06-01T00:00:00", mode=None, now=now)
+    assert err is None
+    assert state.mode == "block"
+
+
+def test_strengthen_refuses_downgrade_even_if_until_is_later():
+    now = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    state = FreezeState(active=True, until="2030-02-01T00:00:00Z", mode="block", reason="prod")
+    before = state.to_dict()
+    err = strengthen_freeze(state, until="2030-03-01T00:00:00Z", mode="approve", now=now)
+    assert err and "lower" in err
+    assert state.to_dict() == before
+
+
+def test_strengthen_refuses_shorten_even_if_mode_rises():
+    now = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    state = FreezeState(active=True, until="2030-03-01T00:00:00Z", mode="approve", reason="prod")
+    before = state.to_dict()
+    err = strengthen_freeze(state, until="2030-02-01T00:00:00Z", mode="block", now=now)
+    assert err and "sooner" in err
+    assert state.to_dict() == before
+
+
+def test_strengthen_omitted_mode_preserves_block_and_can_extend():
+    now = datetime(2030, 1, 1, tzinfo=timezone.utc)
+    state = FreezeState(active=True, until="2030-02-01T00:00:00Z", mode="block", reason="prod")
+    err = strengthen_freeze(state, until="2030-04-01T00:00:00Z", mode=None, now=now)
+    assert err is None
+    assert state.mode == "block"
+    assert state.until == "2030-04-01T00:00:00Z"
+
+
+def test_strengthen_open_ended_stays_open_ended():
+    state = FreezeState(active=True, until=None, mode="approve", reason="manual")
+    before = state.to_dict()
+    err = strengthen_freeze(state, until="2099-01-01T00:00:00Z", mode="block")
+    assert err and "open-ended" in err
+    assert state.to_dict() == before
+    err = strengthen_freeze(state, until=None, mode="block")
+    assert err is None
+    assert state.active and state.mode == "block" and state.until is None
+
+
+def test_strengthen_invalid_mode_and_inactive_past_do_not_activate():
+    state = FreezeState(active=True, until="2099-01-01T00:00:00Z", mode="block", reason="prod")
+    before = state.to_dict()
+    err = strengthen_freeze(state, mode="yolo")
+    assert err and "mode must" in err
+    assert state.to_dict() == before
+    fresh = FreezeState()
+    err = strengthen_freeze(fresh, until="2000-01-01T00:00:00Z")
+    assert err and "later than now" in err
+    assert fresh.active is False
+
+
+def test_strengthen_can_start_or_reactivate_without_lowering_mode():
+    now = datetime(2030, 6, 1, tzinfo=timezone.utc)
+    fresh = FreezeState()
+    err = strengthen_freeze(fresh, until="2099-01-01T00:00:00Z", mode=None, now=now)
+    assert err is None and fresh.active and fresh.mode == "approve"
+    expired = FreezeState(active=True, until="2030-01-01T00:00:00Z", mode="block", reason="old")
+    assert not is_window_active(expired, now=now)
+    err = strengthen_freeze(expired, until="2030-07-01T00:00:00Z", mode=None, now=now)
+    assert err is None and expired.mode == "block"
+    assert is_window_active(expired, now=now)
+
+
+def test_user_set_freeze_can_still_loosen():
+    state = set_freeze(FreezeState(), until="2099-01-01T00:00:00Z", reason="x", mode="block")
+    set_freeze(state, until="2000-01-01T00:00:00Z", reason="done", mode="approve", active=True)
+    assert state.mode == "approve"
+    assert not is_window_active(state)
+
+
+def test_open_ended_clears_expired_and_future_until():
+    """`/freeze on` uses clear_until so the reply matches the window."""
+    now = datetime(2030, 6, 1, tzinfo=timezone.utc)
+    expired = set_freeze(FreezeState(), until="2000-01-01T00:00:00Z", reason="old", mode="block")
+    assert not is_window_active(expired, now=now)
+    assert decide_pre_tool_call(expired, "shell_exec", {"command": "git push"}, now=now) is None
+    # until=None without clear_until keeps the old end. That was the bug.
+    set_freeze(expired, until=None, reason="still old", mode="block", active=True)
+    assert expired.until == "2000-01-01T00:00:00Z"
+    assert not is_window_active(expired, now=now)
+    set_freeze(expired, clear_until=True, reason="revived", mode="block", active=True)
+    assert expired.until is None and expired.mode == "block" and expired.active
+    assert is_window_active(expired, now=now)
+    assert decide_pre_tool_call(expired, "shell_exec", {"command": "git push"}, now=now)["action"] == "block"
+
+    future = set_freeze(FreezeState(), until="2099-01-01T00:00:00Z", reason="sched", mode="block")
+    assert is_window_active(future, now=now)
+    set_freeze(future, clear_until=True, reason="open", mode="block", active=True)
+    assert future.until is None
+    assert is_window_active(future, now=now)
+    assert decide_pre_tool_call(future, "execute_code", {"code": 'subprocess.run(["git","push"])'}, now=now)["action"] == "block"
+    # The user can put a new end on after the open window.
+    set_freeze(future, until="2099-06-01T00:00:00Z", reason="later", mode="block", active=True)
+    assert future.until == "2099-06-01T00:00:00Z"
+    assert is_window_active(future, now=now)
+    assert decide_pre_tool_call(future, "shell_exec", {"command": "git push"}, now=now)["action"] == "block"
 
 
 def test_block_mode_message_names_plugin():
